@@ -1,6 +1,6 @@
 package org.shchyrov.telegram
 
-enum class Losses {
+enum class LossesType {
     HUMANS,
     TANKS,
     ARMORED_VEHICLES,

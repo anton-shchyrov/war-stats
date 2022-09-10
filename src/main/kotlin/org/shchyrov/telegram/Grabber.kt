@@ -18,13 +18,17 @@ import it.tdlight.jni.TdApi.SetTdlibParameters
 import it.tdlight.jni.TdApi.TdlibParameters
 import it.tdlight.jni.TdApi.UpdateAuthorizationState
 import java.nio.file.Paths
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 
 
 class Grabber {
 
     val client: SimpleTelegramClient
+    private val monitor = Object()
+    private val totalLosses = mutableListOf<LossesDay>()
 
     init {
         // Initialize TDLight native libraries
@@ -50,7 +54,11 @@ class Grabber {
 
     fun start(authenticationData: AuthenticationData) = client.start(authenticationData)
 
-    fun waitForExit() = client.waitForExit()
+    fun waitForExit() {
+        synchronized(monitor) { monitor.wait() }
+        client.closeAndWait()
+        client.waitForExit()
+    }
 
     private fun onUpdateAuthorizationState(update: UpdateAuthorizationState) {
         println("onUpdateAuthorizationState: ${update.authorizationState::class.simpleName}")
@@ -82,7 +90,7 @@ class Grabber {
             is AuthorizationStateReady -> {
                 println("Logged in")
 //                searchChat()
-                getMessages()
+                getMessages(0, null)
             }
             is AuthorizationStateClosing -> println("Closing...")
             is AuthorizationStateClosed -> println("Closed")
@@ -113,33 +121,62 @@ class Grabber {
         }
     }
 
-    fun getMessages() {
+    fun getMessages(fromMessages: Long, startDate: LocalDate?) {
         client.send(TdApi.SearchChatMessages(
             -1001149277960,
             "#втрати",
             null,
-            0, //3305, // 2985,
+            fromMessages,
             0,
-            10,
+            100,
             null,
             0
         )) { messages ->
             if (checkError(messages, "SearchChatMessages")) {
                 val msgArr = messages.get().messages
-                println("Message count: ${msgArr.size}")
-                for (msg in msgArr) {
-                    val content = msg.content
-                    println("Message. Class: ${content::class.simpleName}, Date: ${msg.javaDate()}")
-                    if (content is MessageText)
-                        println(content.text.text)
-                    println("-------------")
+                try {
+                    var prevDate = startDate
+                    for (msg in msgArr) {
+                        val content = msg.content
+                        if (content is MessageText) {
+//                            println(content.text.text)
+                            val losses = messageParser.parse(content.text.text)
+                            val curDate = msg.javaDate().toLocalDate()
+                            if (prevDate == null)
+                                prevDate = curDate.plusDays(1)
+                            var duration = ChronoUnit.DAYS.between(curDate, prevDate)
+                            while (duration > 1) {
+                                prevDate = prevDate!!.minusDays(1)
+                                duration--
+                                totalLosses.add(LossesDay(prevDate, emptyMap()))
+                            }
+                            val lossesDay = LossesDay(curDate, losses)
+                            totalLosses.add(lossesDay)
+                            require(
+                                (losses.size == LossesType.values().size) ||
+                                        (losses.keys + LossesType.MISSILES + LossesType.SPECIAL_EQUIPMENTS).size == LossesType.values().size
+                            ) {
+                                "Failed parse message. Found only ${losses.size} items\n. [${msg.state()}]"
+                            }
+                            prevDate = curDate
+                        }
+                    }
+                    msgArr.lastOrNull()?.let { getMessages(it.id, prevDate) } ?: kotlin.run {
+                        println("Finished")
+                        println(LossesDay.headerCaptions())
+                        totalLosses.asReversed().forEach(::println)
+                        synchronized(monitor) { monitor.notify() }
+                    }
+                } catch (e: Throwable) {
+                    e.printStackTrace()
                 }
             }
-            client.sendClose()
         }
     }
 
     companion object {
+
+        private val messageParser = MessageParser()
 
         private fun <T: TdApi.Object> checkError(test: it.tdlight.client.Result<T>, message: String): Boolean {
             val hasError = test.isError
@@ -149,6 +186,9 @@ class Grabber {
 
         private fun TdApi.Message.javaDate() =
             LocalDateTime.ofEpochSecond(this.date.toLong(), 0, ZoneOffset.UTC)
+
+        private fun TdApi.Message.state() =
+            "id: $id, date: ${javaDate()}, content: ${content}"
     }
 }
 
