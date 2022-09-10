@@ -128,7 +128,7 @@ class Grabber {
             null,
             fromMessages,
             0,
-            100,
+            10,
             null,
             0
         )) { messages ->
@@ -148,9 +148,9 @@ class Grabber {
                             while (duration > 1) {
                                 prevDate = prevDate!!.minusDays(1)
                                 duration--
-                                totalLosses.add(LossesDay(prevDate, emptyMap()))
+                                totalLosses.add(LossesDay(prevDate, msg.id, emptyMap()))
                             }
-                            val lossesDay = LossesDay(curDate, losses)
+                            val lossesDay = LossesDay(curDate, msg.id, losses)
                             totalLosses.add(lossesDay)
                             require(
                                 (losses.size == LossesType.values().size) ||
@@ -161,7 +161,7 @@ class Grabber {
                             prevDate = curDate
                         }
                     }
-                    msgArr.lastOrNull()?.let { getMessages(it.id, prevDate) } ?: kotlin.run {
+                    msgArr.takeIf { false }?.lastOrNull()?.let { getMessages(it.id, prevDate) } ?: kotlin.run {
                         println("Finished")
                         println(LossesDay.headerCaptions())
                         totalLosses.asReversed().forEach(::println)
